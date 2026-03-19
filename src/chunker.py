@@ -8,6 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 TARGET_CHUNK_SIZE = 2000  # chars, roughly 512 tokens
+OVERLAP_SIZE = 200  # chars of overlap between adjacent chunks
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
 
@@ -192,20 +193,52 @@ def _split_by_headings(body: str) -> list[tuple[str | None, str]]:
 
 
 def _split_section(text: str, heading: str | None) -> list[str]:
-    """Split a large section into paragraph-based chunks."""
+    """Split a large section into paragraph-based chunks with overlap.
+
+    Adjacent chunks share ~OVERLAP_SIZE chars at boundaries so that
+    ideas straddling a split aren't lost to either embedding.
+    """
     paragraphs = re.split(r"\n\s*\n", text)
-    chunks = []
-    current = ""
+
+    # Build non-overlapping groups of paragraphs first
+    groups: list[list[str]] = []
+    current_paras: list[str] = []
+    current_len = 0
 
     for para in paragraphs:
-        if len(current) + len(para) > TARGET_CHUNK_SIZE and current:
-            chunks.append(current)
-            current = para
+        if current_len + len(para) > TARGET_CHUNK_SIZE and current_paras:
+            groups.append(current_paras)
+            current_paras = [para]
+            current_len = len(para)
         else:
-            current = current + "\n\n" + para if current else para
+            current_paras.append(para)
+            current_len += len(para) + 2  # +2 for \n\n join
 
-    if current.strip():
-        chunks.append(current)
+    if current_paras:
+        groups.append(current_paras)
+
+    if len(groups) <= 1:
+        return ["\n\n".join(g) for g in groups]
+
+    # Build overlapping chunks: pull trailing paragraphs from the
+    # previous group into the start of the next group
+    chunks = []
+    for i, group in enumerate(groups):
+        if i == 0:
+            chunks.append("\n\n".join(group))
+        else:
+            # Grab overlap from the end of the previous group
+            # Always include at least one paragraph for continuity
+            prev = groups[i - 1]
+            overlap_paras = []
+            overlap_len = 0
+            for para in reversed(prev):
+                if overlap_paras and overlap_len + len(para) > OVERLAP_SIZE:
+                    break
+                overlap_paras.insert(0, para)
+                overlap_len += len(para) + 2
+
+            chunks.append("\n\n".join(overlap_paras + group))
 
     return chunks
 
