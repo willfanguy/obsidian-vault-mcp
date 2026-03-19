@@ -76,6 +76,11 @@ def hybrid_search(
         logger.warning(f"FTS search failed (index may not exist): {e}")
         kw_results = sem_results.iloc[0:0]
 
+    # Normalize FTS scores to 0-1 range using the max score in the result set
+    max_fts_score = 0.0
+    if not kw_results.empty and "_score" in kw_results.columns:
+        max_fts_score = kw_results["_score"].max()
+
     # Merge and deduplicate, boost items that appear in both
     seen = {}
     for _, row in sem_results.iterrows():
@@ -88,13 +93,16 @@ def hybrid_search(
 
     for _, row in kw_results.iterrows():
         key = f"{row['file_path']}:{row['chunk_index']}"
+        # Use normalized BM25 score (0-1) instead of flat 1.0
+        raw_score = row.get("_score", 0)
+        norm_score = (raw_score / max_fts_score) if max_fts_score > 0 else 0
         if key in seen:
-            seen[key]["kw_score"] = 1.0
+            seen[key]["kw_score"] = norm_score
         else:
             seen[key] = {
                 "row": row,
                 "sem_score": 0,
-                "kw_score": 1.0,
+                "kw_score": norm_score,
             }
 
     # Combined score: 70% semantic + 30% keyword, boost if both match
