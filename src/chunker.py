@@ -1,6 +1,7 @@
 """Markdown-aware chunking that respects note structure."""
 
 import re
+from html.parser import HTMLParser
 import yaml
 import logging
 
@@ -8,6 +9,33 @@ logger = logging.getLogger(__name__)
 
 TARGET_CHUNK_SIZE = 2000  # chars, roughly 512 tokens
 HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+
+
+class _HTMLTextExtractor(HTMLParser):
+    """Extract plain text from HTML, preserving link text."""
+
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data):
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return "".join(self._parts)
+
+
+def strip_html(text: str) -> str:
+    """Remove HTML tags from text, keeping the readable content."""
+    if "<" not in text:
+        return text
+    extractor = _HTMLTextExtractor()
+    try:
+        extractor.feed(text)
+        return extractor.get_text()
+    except Exception:
+        # If parsing fails, fall back to regex strip
+        return re.sub(r"<[^>]+>", "", text)
 
 
 def parse_frontmatter(content: str) -> tuple[dict, str]:
@@ -77,16 +105,33 @@ def build_metadata_header(metadata: dict, heading: str | None) -> str:
         parts.append(f"Area: {metadata['area']}")
     if metadata.get("source"):
         parts.append(f"Source: {metadata['source']}")
+    if metadata.get("date"):
+        parts.append(f"Date: {metadata['date']}")
     return f"[{' | '.join(parts)}]" if parts else ""
 
 
-def chunk_markdown(file_path: str, content: str) -> list[dict]:
+def chunk_markdown(file_path: str, content: str, file_mtime: float | None = None) -> list[dict]:
     """Split a markdown file into chunks respecting heading structure."""
     metadata, body = parse_frontmatter(content)
     fields = extract_metadata_fields(metadata)
 
+    # Extract date for embedding context (frontmatter > mtime)
+    date_str = ""
+    for key in ("date created", "dateCreated", "date", "created"):
+        val = metadata.get(key)
+        if val:
+            date_str = str(val).split(",")[0].split("T")[0].strip()
+            break
+    if not date_str and file_mtime:
+        from datetime import datetime
+        date_str = datetime.fromtimestamp(file_mtime).strftime("%Y-%m-%d")
+    fields["date"] = date_str
+
     if not body.strip():
         return []
+
+    # Strip HTML from clipped content before chunking
+    body = strip_html(body)
 
     # Split by headings
     sections = _split_by_headings(body)

@@ -20,10 +20,10 @@ TABLE_NAME = "vault_chunks"
 
 
 def create_or_rebuild_fts_index(table: lancedb.table.Table) -> None:
-    """Create or rebuild the full-text search index on the content column."""
+    """Create or rebuild the full-text search index on content, title, and tags."""
     try:
-        table.create_fts_index("content", replace=True)
-        logger.info("FTS index created/rebuilt on 'content' column")
+        table.create_fts_index(["content", "title", "tags"], replace=True)
+        logger.info("FTS index created/rebuilt on content, title, tags columns")
     except Exception as e:
         logger.warning(f"Failed to create FTS index: {e}")
 
@@ -80,7 +80,7 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
             logger.warning(f"Could not read {rel_path}: {e}")
             continue
 
-        chunks = chunk_markdown(rel_path, content)
+        chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
         for chunk in chunks:
             chunk["file_mtime"] = mtime
         all_chunks.extend(chunks)
@@ -184,7 +184,7 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
             content = full_path.read_text(encoding="utf-8", errors="replace")
         except Exception:
             continue
-        chunks = chunk_markdown(rel_path, content)
+        chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
         for chunk in chunks:
             chunk["file_mtime"] = mtime
         new_chunks.extend(chunks)
