@@ -20,10 +20,14 @@ TABLE_NAME = "vault_chunks"
 
 
 def create_or_rebuild_fts_index(table: lancedb.table.Table) -> None:
-    """Create or rebuild the full-text search index on content, title, and tags."""
+    """Create or rebuild the FTS index on the content column.
+
+    LanceDB native FTS only supports single-field indexes.
+    Title/tag matching is handled by the semantic side via metadata-enriched embeddings.
+    """
     try:
-        table.create_fts_index(["content", "title", "tags"], replace=True)
-        logger.info("FTS index created/rebuilt on content, title, tags columns")
+        table.create_fts_index("content", replace=True)
+        logger.info("FTS index created/rebuilt on 'content' column")
     except Exception as e:
         logger.warning(f"Failed to create FTS index: {e}")
 
