@@ -19,6 +19,15 @@ SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".mp3", ".mp4", ".m4
 TABLE_NAME = "vault_chunks"
 
 
+def create_or_rebuild_fts_index(table: lancedb.table.Table) -> None:
+    """Create or rebuild the full-text search index on the content column."""
+    try:
+        table.create_fts_index("content", replace=True)
+        logger.info("FTS index created/rebuilt on 'content' column")
+    except Exception as e:
+        logger.warning(f"Failed to create FTS index: {e}")
+
+
 def get_db(db_path: str | None = None) -> lancedb.DBConnection:
     path = db_path or os.getenv("LANCE_DB_PATH", "./data/vault.lance")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -83,7 +92,7 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
 
     # Embed in batches
     all_vectors = []
-    texts = [c["content"] for c in all_chunks]
+    texts = [c["text_to_embed"] for c in all_chunks]
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         vectors = embeddings.embed_texts(batch)
@@ -110,7 +119,8 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
             }
         )
 
-    db.create_table(TABLE_NAME, data=records)
+    table = db.create_table(TABLE_NAME, data=records)
+    create_or_rebuild_fts_index(table)
 
     duration = time.time() - start
     unique_files = len(set(r["file_path"] for r in records))
@@ -180,7 +190,7 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
         new_chunks.extend(chunks)
 
     if new_chunks:
-        texts = [c["content"] for c in new_chunks]
+        texts = [c["text_to_embed"] for c in new_chunks]
         all_vectors = []
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
@@ -205,6 +215,9 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
                 }
             )
         table.add(records)
+
+    # Rebuild FTS index after any modifications (adds or deletes)
+    create_or_rebuild_fts_index(table)
 
     duration = time.time() - start
     return {

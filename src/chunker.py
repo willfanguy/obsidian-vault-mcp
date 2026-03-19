@@ -56,6 +56,30 @@ def extract_metadata_fields(fm: dict) -> dict:
     }
 
 
+def build_metadata_header(metadata: dict, heading: str | None) -> str:
+    """Build a bracketed metadata header for embedding context.
+
+    Prepended to chunk content before embedding so the vector captures
+    metadata signals (title, tags, projects, etc.) alongside body text.
+    """
+    parts = []
+    if metadata.get("title"):
+        parts.append(f"Title: {metadata['title']}")
+    if heading:
+        parts.append(f"Section: {heading}")
+    tags = metadata.get("tags", [])
+    if tags and isinstance(tags, list):
+        parts.append(f"Tags: {', '.join(str(t) for t in tags if t)}")
+    projects = metadata.get("projects", [])
+    if projects and isinstance(projects, list):
+        parts.append(f"Projects: {', '.join(str(p) for p in projects if p)}")
+    if metadata.get("area"):
+        parts.append(f"Area: {metadata['area']}")
+    if metadata.get("source"):
+        parts.append(f"Source: {metadata['source']}")
+    return f"[{' | '.join(parts)}]" if parts else ""
+
+
 def chunk_markdown(file_path: str, content: str) -> list[dict]:
     """Split a markdown file into chunks respecting heading structure."""
     metadata, body = parse_frontmatter(content)
@@ -149,11 +173,13 @@ def _make_chunk(
     metadata: dict,
 ) -> dict:
     """Create a chunk dict ready for embedding and storage."""
+    header = build_metadata_header(metadata, heading)
     return {
         "file_path": file_path,
         "chunk_index": chunk_index,
         "heading": heading or "",
         "content": content,
+        "text_to_embed": f"{header}\n\n{content}" if header else content,
         "title": metadata.get("title", ""),
         "tags": metadata.get("tags", []),
         "projects": metadata.get("projects", []),

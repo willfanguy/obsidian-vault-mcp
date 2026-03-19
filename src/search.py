@@ -72,8 +72,8 @@ def hybrid_search(
     # Keyword results (full-text search on content)
     try:
         kw_results = table.search(query, query_type="fts").limit(top_k * 2).to_pandas()
-    except Exception:
-        # FTS not available, fall back to semantic only
+    except Exception as e:
+        logger.warning(f"FTS search failed (index may not exist): {e}")
         kw_results = sem_results.iloc[0:0]
 
     # Merge and deduplicate, boost items that appear in both
