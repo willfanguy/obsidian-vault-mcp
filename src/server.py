@@ -5,6 +5,9 @@ import logging
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from .search import semantic_search, hybrid_search, get_note, list_by_metadata, index_status
 from .indexer import full_index, incremental_index
@@ -17,6 +20,17 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("obsidian-vault-search")
 
 VAULT_PATH = os.getenv("VAULT_PATH", "/Users/will/Vaults/HigherJump")
+API_KEY = os.getenv("VAULT_API_KEY", "")
+
+
+class APIKeyMiddleware(BaseHTTPMiddleware):
+    """Reject requests without a valid API key (Bearer token)."""
+
+    async def dispatch(self, request: Request, call_next):
+        auth = request.headers.get("authorization", "")
+        if auth == f"Bearer {API_KEY}":
+            return await call_next(request)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
 
 @mcp.tool()
@@ -188,6 +202,17 @@ def main():
 
     if transport == "stdio":
         mcp.run(transport="stdio")
+    elif API_KEY:
+        # Run with API key auth middleware
+        import uvicorn
+        from starlette.middleware import Middleware
+
+        app = mcp.http_app(
+            transport="sse",
+            middleware=[Middleware(APIKeyMiddleware)],
+        )
+        logger.info(f"Starting with API key auth on port {port}")
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="sse", host="0.0.0.0", port=port)
 
