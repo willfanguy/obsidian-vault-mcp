@@ -34,6 +34,20 @@ class APIKeyMiddleware:
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
 
+        # Health check endpoint (no auth required) for service validation
+        path = scope.get("path", "")
+        if scope["type"] == "http" and path == "/":
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b'{"status": "ok", "service": "obsidian-vault-search"}',
+            })
+            return
+
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
 
