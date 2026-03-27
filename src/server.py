@@ -241,10 +241,19 @@ def main():
     elif API_KEY:
         # Run with API key auth middleware (pure ASGI, SSE-safe)
         import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
 
-        raw_app = mcp.http_app(transport="sse")
-        app = APIKeyMiddleware(raw_app)
-        logger.info(f"Starting with API key auth on port {port}")
+        # Mount both SSE (/sse) and Streamable HTTP (/mcp) transports
+        sse_app = mcp.http_app(transport="sse")
+        http_app = mcp.http_app(transport="streamable-http")
+
+        combined = Starlette(routes=[
+            Mount("/mcp", app=http_app),
+            Mount("/", app=sse_app),
+        ])
+        app = APIKeyMiddleware(combined)
+        logger.info(f"Starting with API key auth on port {port} (SSE + Streamable HTTP)")
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="sse", host="0.0.0.0", port=port)
