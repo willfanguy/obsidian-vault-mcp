@@ -34,8 +34,9 @@ class APIKeyMiddleware:
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
 
-        # Health check endpoint (no auth required) for service validation
         path = scope.get("path", "")
+
+        # Allow without auth: health check, SSE stream (read-only until messages are sent)
         if scope["type"] == "http" and path == "/":
             await send({
                 "type": "http.response.start",
@@ -48,11 +49,14 @@ class APIKeyMiddleware:
             })
             return
 
+        # SSE stream endpoint — allow GET without auth (stream is inert until
+        # authenticated POST /messages/ calls execute tools)
+        method = scope.get("method", "")
+        if path == "/sse" and method == "GET":
+            return await self.app(scope, receive, send)
+
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
-
-        # Log auth attempts for debugging
-        logger.info(f"Auth check: path={path}, auth={'present' if auth else 'missing'}, auth_value={auth[:20]}..." if auth else f"Auth check: path={path}, no auth header")
 
         if auth == f"Bearer {API_KEY}":
             return await self.app(scope, receive, send)
