@@ -5,9 +5,6 @@ import logging
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse
 
 from .search import semantic_search, hybrid_search, get_note, list_by_metadata, index_status
 from .indexer import full_index, incremental_index
@@ -23,14 +20,36 @@ VAULT_PATH = os.getenv("VAULT_PATH", "/Users/will/Vaults/HigherJump")
 API_KEY = os.getenv("VAULT_API_KEY", "")
 
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
-    """Reject requests without a valid API key (Bearer token)."""
+class APIKeyMiddleware:
+    """Pure ASGI middleware that rejects requests without a valid API key.
 
-    async def dispatch(self, request: Request, call_next):
-        auth = request.headers.get("authorization", "")
+    Uses raw ASGI instead of BaseHTTPMiddleware to avoid conflicts
+    with SSE streaming responses.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+
+        headers = dict(scope.get("headers", []))
+        auth = headers.get(b"authorization", b"").decode()
+
         if auth == f"Bearer {API_KEY}":
-            return await call_next(request)
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await self.app(scope, receive, send)
+
+        # Reject with 401
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"error": "unauthorized"}',
+        })
 
 
 @mcp.tool()
@@ -203,14 +222,11 @@ def main():
     if transport == "stdio":
         mcp.run(transport="stdio")
     elif API_KEY:
-        # Run with API key auth middleware
+        # Run with API key auth middleware (pure ASGI, SSE-safe)
         import uvicorn
-        from starlette.middleware import Middleware
 
-        app = mcp.http_app(
-            transport="sse",
-            middleware=[Middleware(APIKeyMiddleware)],
-        )
+        raw_app = mcp.http_app(transport="sse")
+        app = APIKeyMiddleware(raw_app)
         logger.info(f"Starting with API key auth on port {port}")
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
