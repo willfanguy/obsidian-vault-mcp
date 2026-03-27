@@ -51,6 +51,9 @@ class APIKeyMiddleware:
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
 
+        # Log auth attempts for debugging
+        logger.info(f"Auth check: path={path}, auth={'present' if auth else 'missing'}, auth_value={auth[:20]}..." if auth else f"Auth check: path={path}, no auth header")
+
         if auth == f"Bearer {API_KEY}":
             return await self.app(scope, receive, send)
 
