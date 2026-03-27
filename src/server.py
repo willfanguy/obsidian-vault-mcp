@@ -245,24 +245,10 @@ def main():
     elif API_KEY:
         # Run with API key auth middleware (pure ASGI, SSE-safe)
         import uvicorn
-        from starlette.applications import Starlette
-        from starlette.routing import Mount
 
-        # Serve both transports: SSE at /sse, Streamable HTTP at /mcp
-        # Use a simple ASGI dispatcher that routes by path prefix
         sse_app = mcp.http_app(transport="sse")
-        http_app = mcp.http_app(transport="streamable-http")
-
-        class TransportRouter:
-            """Route /mcp to streamable-http, everything else to SSE app."""
-            async def __call__(self, scope, receive, send):
-                path = scope.get("path", "")
-                if path.startswith("/mcp"):
-                    return await http_app(scope, receive, send)
-                return await sse_app(scope, receive, send)
-
-        app = APIKeyMiddleware(TransportRouter())
-        logger.info(f"Starting with API key auth on port {port} (SSE + Streamable HTTP)")
+        app = APIKeyMiddleware(sse_app)
+        logger.info(f"Starting with API key auth on port {port}")
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="sse", host="0.0.0.0", port=port)
