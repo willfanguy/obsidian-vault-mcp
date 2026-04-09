@@ -3,13 +3,14 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.will.vault-incremental-reindex</string>
+    <string>com.user.vault-incremental-reindex</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>cd /Users/will/Repos/personal/obsidian-vault-mcp &amp;&amp; .venv/bin/python3 scripts/incremental_reindex.py</string>
+        <!-- Update path to your clone of obsidian-vault-mcp -->
+        <string>cd $HOME/Repos/obsidian-vault-mcp &amp;&amp; .venv/bin/python3 scripts/incremental_reindex.py</string>
     </array>
 
     <key>StartInterval</key>
@@ -28,8 +29,9 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- Update to your Obsidian vault path -->
         <key>VAULT_PATH</key>
-        <string>/Users/will/Vaults/HigherJump</string>
+        <string>/path/to/your/vault</string>
     </dict>
 </dict>
 </plist>
