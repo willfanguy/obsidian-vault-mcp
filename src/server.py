@@ -49,10 +49,9 @@ class APIKeyMiddleware:
             })
             return
 
-        # SSE stream endpoint — allow GET without auth (stream is inert until
-        # authenticated POST /messages/ calls execute tools)
-        method = scope.get("method", "")
-        if path == "/sse" and method == "GET":
+        # SSE stream endpoint — allow without auth for connector validation.
+        # The stream is inert until authenticated POST /messages/ calls execute tools.
+        if path == "/sse":
             return await self.app(scope, receive, send)
 
         headers = dict(scope.get("headers", []))

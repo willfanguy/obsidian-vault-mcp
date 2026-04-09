@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.will.vault-incremental-reindex</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd /Users/will/Repos/personal/obsidian-vault-mcp &amp;&amp; .venv/bin/python3 scripts/incremental_reindex.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/vault-incremental-reindex.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/vault-incremental-reindex.error</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>VAULT_PATH</key>
+        <string>/Users/will/Vaults/HigherJump</string>
+    </dict>
+</dict>
+</plist>
