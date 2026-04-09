@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("obsidian-vault-search")
 
-VAULT_PATH = os.getenv("VAULT_PATH", "/Users/will/Vaults/HigherJump")
+VAULT_PATH = os.getenv("VAULT_PATH", "")
 API_KEY = os.getenv("VAULT_API_KEY", "")
 
 
