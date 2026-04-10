@@ -3,10 +3,9 @@
 import os
 import logging
 
-import lancedb
 
 from . import embeddings
-from .indexer import get_db, get_table, TABLE_NAME, scan_vault
+from .indexer import get_db, get_table, scan_vault
 from .models import SearchResult, NoteContent, NoteMetadata, IndexStatus
 
 logger = logging.getLogger(__name__)

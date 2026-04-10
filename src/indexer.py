@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 
 import lancedb
-import pyarrow as pa
 
 from . import embeddings
 from .chunker import chunk_markdown
@@ -66,7 +65,7 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
     start = time.time()
     vault = Path(vault_path)
     db = get_db(db_path)
-    dim = embeddings.get_dimensions()
+    embeddings.get_dimensions()  # warm up embedding provider
 
     # Drop existing table
     if TABLE_NAME in db.table_names():

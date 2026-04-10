@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 
 from .search import semantic_search, hybrid_search, get_note, list_by_metadata, index_status
-from .indexer import full_index, incremental_index
+from .indexer import incremental_index
 
 load_dotenv()
 
