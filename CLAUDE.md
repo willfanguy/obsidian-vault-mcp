@@ -25,6 +25,31 @@ vault-mcp --transport sse --host 0.0.0.0 --port 8765
 .venv/bin/python scripts/incremental_reindex.py
 ```
 
+## Testing
+
+```bash
+# Run all tests
+.venv/bin/pytest tests/ -v
+
+# Install test deps (if venv exists)
+uv pip install --python .venv/bin/python -e ".[test]"
+```
+
+- **Frameworks**: pytest + hypothesis (property-based testing)
+- **Test location**: `tests/` directory
+- **Policy**: Follows workspace-level Testing Standards. Pure functions tested directly; search scoring tested via formula replication, not live LanceDB.
+
+### Test coverage
+
+- `chunker.py` — frontmatter parsing, wikilink cleaning, metadata headers, HTML stripping, heading splitting, paragraph overlap chunking, full integration
+- `search.py` — hybrid scoring formula (70/30 weighting, dual-match 1.2x boost), BM25 normalization
+
+### Not yet tested
+
+- `embeddings.py` — provider dispatch, truncation, batch fallback (needs mocking)
+- `indexer.py` — vault scanning, incremental delta logic (needs filesystem fixtures)
+- `server.py` — MCP tool registrations, API key middleware
+
 ## Architecture
 
 ```

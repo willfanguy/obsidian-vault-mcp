@@ -15,5 +15,14 @@ dependencies = [
     "pandas>=2.0",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "hypothesis",
+]
+
 [project.scripts]
 vault-mcp = "src.server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
