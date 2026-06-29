@@ -245,8 +245,11 @@ def main():
         # Run with API key auth middleware (pure ASGI, SSE-safe)
         import uvicorn
 
-        sse_app = mcp.http_app(transport="sse")
-        app = APIKeyMiddleware(sse_app)
+        # Streamable HTTP transport (replaces deprecated SSE, which raced the
+        # client init handshake -> "Received request before initialization was
+        # complete" / -32602 on every tool call). Served at /mcp.
+        http_app = mcp.http_app(transport="http")
+        app = APIKeyMiddleware(http_app)
         logger.info(f"Starting with API key auth on port {port}")
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
