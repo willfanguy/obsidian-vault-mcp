@@ -1,6 +1,7 @@
 """Vault indexing: scan files, chunk, embed, store in LanceDB."""
 
 import os
+import json
 import time
 import logging
 from pathlib import Path
@@ -16,6 +17,48 @@ SKIP_DIRS = {".obsidian", ".git", ".trash", "6. Media", "TaskNotes/Views", "_bac
 SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".mp3", ".mp4", ".m4a", ".wav"}
 
 TABLE_NAME = "vault_chunks"
+MANIFEST_NAME = "index_manifest.json"
+
+
+def _manifest_path(db_path: str | None = None) -> str:
+    """Path to the processed-file manifest (sidecar to the LanceDB directory).
+
+    The chunk table only holds rows for files that produced at least one chunk,
+    so it can't answer "have we already processed this file?" for empty or
+    heading-only notes (they yield zero chunks). Without a separate record, those
+    files are re-scanned on every run and counted as perpetually "pending." The
+    manifest records the mtime of every file we've processed — regardless of
+    chunk count — so zero-chunk notes settle instead of looping forever.
+    """
+    path = db_path or os.getenv("LANCE_DB_PATH", "./data/vault.lance")
+    return os.path.join(os.path.dirname(path) or ".", MANIFEST_NAME)
+
+
+def load_manifest(db_path: str | None = None) -> dict[str, float] | None:
+    """Load the processed-file manifest. Returns None if it hasn't been written yet."""
+    manifest_path = _manifest_path(db_path)
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            data = json.load(f)
+        return {str(k): float(v) for k, v in data.items()}
+    except Exception as e:
+        logger.warning(f"Could not read index manifest ({manifest_path}): {e}")
+        return None
+
+
+def save_manifest(mtimes: dict[str, float], db_path: str | None = None) -> None:
+    """Atomically write the processed-file manifest (path -> mtime)."""
+    manifest_path = _manifest_path(db_path)
+    try:
+        os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
+        tmp_path = f"{manifest_path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(mtimes, f)
+        os.replace(tmp_path, manifest_path)
+    except Exception as e:
+        logger.warning(f"Could not write index manifest ({manifest_path}): {e}")
 
 
 def create_or_rebuild_fts_index(table: lancedb.table.Table) -> None:
@@ -75,6 +118,7 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
     logger.info(f"Scanning {len(files)} markdown files...")
 
     all_chunks = []
+    processed_mtimes: dict[str, float] = {}
     for rel_path, mtime in files:
         full_path = vault / rel_path
         try:
@@ -83,13 +127,24 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
             logger.warning(f"Could not read {rel_path}: {e}")
             continue
 
+        # Record every file we successfully read, even if it produces zero
+        # chunks, so empty/heading-only notes aren't flagged as pending forever.
+        processed_mtimes[rel_path] = mtime
         chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
         for chunk in chunks:
             chunk["file_mtime"] = mtime
         all_chunks.extend(chunks)
 
+    # Persist the manifest regardless of whether any chunks were produced.
+    save_manifest(processed_mtimes, db_path)
+
     if not all_chunks:
-        return {"files_indexed": 0, "chunks_created": 0, "files_removed": 0, "duration_seconds": 0}
+        return {
+            "files_indexed": len(processed_mtimes),
+            "chunks_created": 0,
+            "files_removed": 0,
+            "duration_seconds": round(time.time() - start, 2),
+        }
 
     logger.info(f"Embedding {len(all_chunks)} chunks...")
 
@@ -150,22 +205,32 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
     # Get current file states
     current_files = dict(scan_vault(vault_path))
 
-    # Get indexed file states from LanceDB
-    df = table.to_pandas()
-    indexed_mtimes = {}
-    for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
-        indexed_mtimes[row["file_path"]] = row["file_mtime"]
+    # Determine what we've already processed and at which mtime. Prefer the
+    # manifest (records every processed file, including zero-chunk notes); fall
+    # back to chunk-derived mtimes for the first run after upgrading, before a
+    # manifest exists.
+    known_mtimes = load_manifest(db_path)
+    manifest_missing = known_mtimes is None
+    if manifest_missing:
+        df = table.to_pandas()
+        known_mtimes = {}
+        for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
+            known_mtimes[row["file_path"]] = row["file_mtime"]
 
     # Find files that need reindexing
     to_reindex = []
     for rel_path, mtime in current_files.items():
-        if rel_path not in indexed_mtimes or mtime > indexed_mtimes[rel_path]:
+        if rel_path not in known_mtimes or mtime > known_mtimes[rel_path]:
             to_reindex.append((rel_path, mtime))
 
     # Find files that were deleted
-    deleted = set(indexed_mtimes.keys()) - set(current_files.keys())
+    deleted = set(known_mtimes.keys()) - set(current_files.keys())
 
     if not to_reindex and not deleted:
+        # Nothing to do. Seed the manifest on the first run after upgrading so
+        # the chunk-derived fallback doesn't recur (and zero-chunk files settle).
+        if manifest_missing:
+            save_manifest(dict(current_files), db_path)
         return {
             "files_indexed": 0,
             "chunks_created": 0,
@@ -181,11 +246,13 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
 
     # Index new/changed files
     new_chunks = []
+    failed: set[str] = set()
     for rel_path, mtime in to_reindex:
         full_path = vault / rel_path
         try:
             content = full_path.read_text(encoding="utf-8", errors="replace")
         except Exception:
+            failed.add(rel_path)
             continue
         chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
         for chunk in chunks:
@@ -221,6 +288,17 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
 
     # Rebuild FTS index after any modifications (adds or deletes)
     create_or_rebuild_fts_index(table)
+
+    # Update the manifest to reflect the current on-disk state. After a run every
+    # current file is processed at its current mtime (unchanged-and-known, or just
+    # reindexed). Files that failed to read keep their prior state so they retry.
+    new_manifest = dict(current_files)
+    for rel_path in failed:
+        if rel_path in known_mtimes:
+            new_manifest[rel_path] = known_mtimes[rel_path]
+        else:
+            new_manifest.pop(rel_path, None)
+    save_manifest(new_manifest, db_path)
 
     duration = time.time() - start
     return {

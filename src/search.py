@@ -5,7 +5,7 @@ import logging
 
 
 from . import embeddings
-from .indexer import get_db, get_table, scan_vault
+from .indexer import get_db, get_table, scan_vault, load_manifest
 from .models import SearchResult, NoteContent, NoteMetadata, IndexStatus
 
 logger = logging.getLogger(__name__)
@@ -205,17 +205,22 @@ def index_status() -> IndexStatus:
     total_chunks = len(df)
     total_files = df["file_path"].nunique()
 
-    # Check for pending reindex
+    # Check for pending reindex. Prefer the processed-file manifest (which tracks
+    # every indexed file, including zero-chunk notes); fall back to chunk-derived
+    # mtimes if the manifest hasn't been written yet. Using only chunk rows here
+    # made zero-chunk notes count as pending forever.
     vault_path = os.getenv("VAULT_PATH", "")
     pending = 0
     if vault_path:
         current_files = dict(scan_vault(vault_path))
-        indexed_mtimes = {}
-        for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
-            indexed_mtimes[row["file_path"]] = row["file_mtime"]
+        known_mtimes = load_manifest()
+        if known_mtimes is None:
+            known_mtimes = {}
+            for _, row in df[["file_path", "file_mtime"]].drop_duplicates("file_path").iterrows():
+                known_mtimes[row["file_path"]] = row["file_mtime"]
 
         for rel_path, mtime in current_files.items():
-            if rel_path not in indexed_mtimes or mtime > indexed_mtimes[rel_path]:
+            if rel_path not in known_mtimes or mtime > known_mtimes[rel_path]:
                 pending += 1
 
     # DB size
