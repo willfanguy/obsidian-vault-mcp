@@ -60,16 +60,32 @@ class APIKeyMiddleware:
         if auth == f"Bearer {API_KEY}":
             return await self.app(scope, receive, send)
 
-        # Reject with 401
+        # Anonymous requests get 404, not 401 — deliberately.
+        #
+        # MCP clients treat a 401 as "this resource uses OAuth" and begin a
+        # discovery + Dynamic Client Registration flow. Claude probes
+        # /.well-known/oauth-authorization-server and
+        # /.well-known/oauth-protected-resource at the ORIGIN ROOT when adding a
+        # custom connector; answering those with 401 while sending no
+        # WWW-Authenticate header advertises an authorization server that does
+        # not exist here, and setup fails with "Couldn't register with <name>'s
+        # sign-in service."
+        #
+        # A caller that DID send an Authorization header still gets 401, since
+        # "your token is wrong" is real, useful information for a misconfigured
+        # client. Auth strength is unchanged either way — anonymous requests are
+        # still rejected, just with a status that doesn't advertise OAuth.
+        if auth:
+            status, body = 401, b'{"error": "unauthorized"}'
+        else:
+            status, body = 404, b'{"error": "not found"}'
+
         await send({
             "type": "http.response.start",
-            "status": 401,
+            "status": status,
             "headers": [(b"content-type", b"application/json")],
         })
-        await send({
-            "type": "http.response.body",
-            "body": b'{"error": "unauthorized"}',
-        })
+        await send({"type": "http.response.body", "body": body})
 
 
 @mcp.tool()
