@@ -14,6 +14,10 @@ jobs:
       - uses: astral-sh/ruff-action@v3
         with:
           src: src/
+          # Pin the linter. Unpinned, this action installs the newest ruff, so a
+          # ruff release can turn a green main red without a code change -- which
+          # is exactly what 0.16 did here. Bump deliberately, not by surprise.
+          version: "0.16.1"
 
   test:
     runs-on: ubuntu-latest

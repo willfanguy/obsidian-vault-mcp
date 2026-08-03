@@ -26,3 +26,26 @@ vault-mcp = "src.server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint]
+# Pinned explicitly rather than relying on ruff's defaults.
+#
+# This repo had no ruff config, so CI enforced whatever ruff's default select
+# happened to be. Ruff 0.16 widened that default, and because the CI action
+# installs ruff unpinned, a commit that passed in July started failing with 18
+# errors in untouched files. Verified by running several ruff versions against
+# the same tree: 0.11 / 0.13 / 0.15 all pass, 0.16.1 reports 18.
+#
+# These four are the historical default set, so this restores the rule set that
+# was actually being enforced -- now stated outright, so a future ruff release
+# cannot move the goalposts again.
+select = ["E4", "E7", "E9", "F"]
+
+# Deliberately NOT enabled yet. Ruff 0.16 flags these across indexer.py,
+# search.py, embeddings.py and chunker.py; adopting them is a real code change,
+# not a config change, so it belongs in its own commit:
+#   BLE001  blind `except Exception` (9 sites) -- narrowing these alters
+#           behaviour in the indexer, so each needs judging on its own
+#   DTZ006  naive datetime.fromtimestamp() on file mtimes
+#   C401    two generators that could be set comprehensions
+#   I001    unsorted import blocks (mechanical, auto-fixable)
