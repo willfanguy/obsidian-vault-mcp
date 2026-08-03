@@ -36,7 +36,7 @@ class APIKeyMiddleware:
 
         path = scope.get("path", "")
 
-        # Allow without auth: health check, SSE stream (read-only until messages are sent)
+        # Allow without auth: health check only.
         if scope["type"] == "http" and path == "/":
             await send({
                 "type": "http.response.start",
@@ -48,11 +48,6 @@ class APIKeyMiddleware:
                 "body": b'{"status": "ok", "service": "obsidian-vault-search"}',
             })
             return
-
-        # SSE stream endpoint — allow without auth for connector validation.
-        # The stream is inert until authenticated POST /messages/ calls execute tools.
-        if path == "/sse":
-            return await self.app(scope, receive, send)
 
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
