@@ -1,5 +1,6 @@
 """FastMCP server exposing vault semantic search tools."""
 
+import hmac
 import os
 import logging
 
@@ -18,17 +19,59 @@ mcp = FastMCP("obsidian-vault-search")
 
 VAULT_PATH = os.getenv("VAULT_PATH", "")
 API_KEY = os.getenv("VAULT_API_KEY", "")
+FUNNEL_PREFIX = os.getenv("VAULT_FUNNEL_PREFIX", "")
+
+# Tool annotations. Everything here reads the vault or the index; only
+# vault_reindex writes (to the index — never to the vault itself).
+READ_ONLY = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
+MUTATING = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": False,
+}
 
 
 class APIKeyMiddleware:
-    """Pure ASGI middleware that rejects requests without a valid API key.
+    """Pure ASGI middleware that rejects requests without a valid credential.
 
-    Uses raw ASGI instead of BaseHTTPMiddleware to avoid conflicts
-    with SSE streaming responses.
+    Uses raw ASGI instead of BaseHTTPMiddleware to avoid conflicts with
+    streaming responses. The root path "/" is an unauthenticated health check.
+    Every other path needs ONE of two credentials:
+
+    1. `Authorization: Bearer <VAULT_API_KEY>` — what LAN clients (Claude Code,
+       Claude Desktop via the mcp-remote shim) use.
+    2. A leading secret path segment matching VAULT_FUNNEL_PREFIX, for clients
+       that cannot set headers at all (Claude custom connectors). The prefix is
+       stripped before the request reaches FastMCP, so the app below still sees
+       "/mcp" and existing header-based clients are entirely unaffected.
+
+    ⚠️ Option 2 is deliberately weaker: it trades header secrecy for URL
+    secrecy, and a capability URL leaks through proxy logs, referrers and
+    browser history in ways a header does not. Unlike service-manuals — where
+    the same mechanism guards a freely-downloadable manual — the corpus here is
+    Will's PRIVATE vault, and `vault_reindex` both mutates the index and spends
+    OpenAI credit. Anyone holding the URL gets all of that, and rotating the
+    prefix is the only revocation. Enabled by explicit decision (2026-08-04);
+    leave `VAULT_FUNNEL_PREFIX` blank to keep the server bearer-only.
     """
 
     def __init__(self, app):
         self.app = app
+
+    @staticmethod
+    def _match(candidate: str, secret: str) -> bool:
+        """Constant-time equality that never raises on odd input."""
+        if not secret:
+            return False
+        return hmac.compare_digest(
+            candidate.encode("utf-8", "replace"), secret.encode("utf-8")
+        )
 
     async def __call__(self, scope, receive, send):
         if scope["type"] not in ("http", "websocket"):
@@ -52,8 +95,30 @@ class APIKeyMiddleware:
         headers = dict(scope.get("headers", []))
         auth = headers.get(b"authorization", b"").decode()
 
-        if auth == f"Bearer {API_KEY}":
+        if self._match(auth, f"Bearer {API_KEY}" if API_KEY else ""):
             return await self.app(scope, receive, send)
+
+        # Split the first path segment and compare it in constant time, rather
+        # than str.startswith, so the comparison itself leaks nothing and a
+        # longer segment that merely begins with the secret cannot match.
+        if FUNNEL_PREFIX:
+            head, _, tail = path.lstrip("/").partition("/")
+            if self._match("/" + head, FUNNEL_PREFIX):
+                # Drop a trailing slash so FastMCP (which mounts at "/mcp", NOT
+                # "/mcp/" — verified on 3.1.1 and 3.2.4) answers directly
+                # instead of issuing a 307. That redirect is a trap here:
+                # Starlette builds the Location from the rewritten path only,
+                # so the secret prefix is lost and the client follows it
+                # straight into a 401. Normalising here means both
+                # "<prefix>/mcp" and "<prefix>/mcp/" work.
+                rewritten = "/" + tail
+                if len(rewritten) > 1:
+                    rewritten = rewritten.rstrip("/")
+                scope = dict(scope)
+                scope["path"] = rewritten
+                if scope.get("raw_path"):
+                    scope["raw_path"] = rewritten.encode()
+                return await self.app(scope, receive, send)
 
         # Anonymous requests get 404, not 401 — deliberately.
         #
@@ -83,7 +148,7 @@ class APIKeyMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def vault_search(query: str, top_k: int = 10, tags: list[str] | None = None) -> str:
     """Search the Obsidian vault by semantic similarity.
 
@@ -112,7 +177,7 @@ def vault_search(query: str, top_k: int = 10, tags: list[str] | None = None) -> 
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def vault_search_hybrid(query: str, top_k: int = 10) -> str:
     """Search the vault combining semantic similarity with keyword matching.
 
@@ -142,7 +207,7 @@ def vault_search_hybrid(query: str, top_k: int = 10) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def vault_get_note(path: str) -> str:
     """Retrieve the full content of a vault note.
 
@@ -170,7 +235,7 @@ def vault_get_note(path: str) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def vault_list_by_metadata(
     tags: list[str] | None = None,
     projects: list[str] | None = None,
@@ -202,7 +267,7 @@ def vault_list_by_metadata(
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def vault_index_status() -> str:
     """Check the current state of the vault search index.
 
@@ -219,7 +284,7 @@ def vault_index_status() -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool(annotations=MUTATING)
 def vault_reindex(path: str | None = None) -> str:
     """Reindex the vault (or a single file).
 
@@ -246,25 +311,33 @@ def vault_reindex(path: str | None = None) -> str:
 
 
 def main():
-    """Entry point for the MCP server."""
+    """Entry point for the MCP server. Transport + auth chosen from env."""
     port = int(os.getenv("MCP_PORT", "3789"))
-    transport = os.getenv("MCP_TRANSPORT", "sse")
+    # Default is streamable HTTP. SSE is gone: it raced the client init
+    # handshake ("Received request before initialization was complete" /
+    # -32602 on every tool call) and the server no longer serves it at all.
+    transport = os.getenv("MCP_TRANSPORT", "http")
 
     if transport == "stdio":
         mcp.run(transport="stdio")
-    elif API_KEY:
-        # Run with API key auth middleware (pure ASGI, SSE-safe)
+        return
+
+    if API_KEY:
+        # Auth middleware wraps the app as raw ASGI. Served at /mcp.
         import uvicorn
 
-        # Streamable HTTP transport (replaces deprecated SSE, which raced the
-        # client init handshake -> "Received request before initialization was
-        # complete" / -32602 on every tool call). Served at /mcp.
         http_app = mcp.http_app(transport="http")
         app = APIKeyMiddleware(http_app)
-        logger.info(f"Starting with API key auth on port {port}")
+        logger.info(f"Serving streamable HTTP with API-key auth on :{port}")
+        if FUNNEL_PREFIX:
+            # Never log the prefix itself — it is a credential.
+            logger.info(
+                "Secret-path credential also enabled (%d chars)", len(FUNNEL_PREFIX)
+            )
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        logger.warning("VAULT_API_KEY unset — serving WITHOUT auth.")
+        mcp.run(transport="http", host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
