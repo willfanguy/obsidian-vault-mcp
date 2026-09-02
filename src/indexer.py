@@ -4,6 +4,7 @@ import os
 import json
 import time
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 
 import lancedb
@@ -59,6 +60,30 @@ def save_manifest(mtimes: dict[str, float], db_path: str | None = None) -> None:
         os.replace(tmp_path, manifest_path)
     except Exception as e:
         logger.warning(f"Could not write index manifest ({manifest_path}): {e}")
+
+
+def sql_string_literal(value: str) -> str:
+    """Render a Python string as a SQL string literal for a LanceDB filter.
+
+    LanceDB parses filter expressions as SQL, where double quotes denote an
+    *identifier* (a column name) and only single quotes denote a string literal.
+    Interpolating a file path with double quotes therefore asks the planner for a
+    column named after the path, which fails with "Schema error: No field named
+    ...". Embedded single quotes are doubled, per SQL, so real vault paths like
+    "5. Archive/Brett's PopClip Extensions.md" don't terminate the literal early.
+    """
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+def build_path_delete_filter(paths: Iterable[str]) -> str:
+    """Build the filter matching every chunk row belonging to the given paths.
+
+    Paths are sorted so the expression is stable across runs, which makes it
+    reproducible when a failing filter needs to be read out of a log.
+    """
+    quoted = ", ".join(sql_string_literal(p) for p in sorted(paths))
+    return f"file_path IN ({quoted})"
 
 
 def create_or_rebuild_fts_index(table: lancedb.table.Table) -> None:
@@ -241,8 +266,7 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
     # Remove old chunks for files being reindexed or deleted
     paths_to_remove = set(p for p, _ in to_reindex) | deleted
     if paths_to_remove:
-        filter_expr = " OR ".join(f'file_path = "{p}"' for p in paths_to_remove)
-        table.delete(filter_expr)
+        table.delete(build_path_delete_filter(paths_to_remove))
 
     # Index new/changed files
     new_chunks = []

@@ -37,12 +37,15 @@ uv pip install --python .venv/bin/python -e ".[test]"
 
 - **Frameworks**: pytest + hypothesis (property-based testing)
 - **Test location**: `tests/` directory
-- **Policy**: Follows workspace-level Testing Standards. Pure functions tested directly; search scoring tested via formula replication, not live LanceDB.
+- **Policy**: Follows workspace-level Testing Standards. Pure functions tested directly; search scoring tested via formula replication, not live LanceDB. The one deliberate exception is the delete-filter test, which does hit a scratch LanceDB table: the bug it guards was a wrong assumption about LanceDB's SQL dialect, and a replicated formula would have reproduced the same wrong assumption.
 
 ### Test coverage
 
 - `chunker.py` — frontmatter parsing, wikilink cleaning, metadata headers, HTML stripping, heading splitting, paragraph overlap chunking, full integration
 - `search.py` — hybrid scoring formula (70/30 weighting, dual-match 1.2x boost), BM25 normalization
+- `indexer.py` — manifest I/O and the pending-reindex predicate; `sql_string_literal` /
+  `build_path_delete_filter` quoting and escaping, plus one live scratch-table
+  delete that pins the LanceDB filter dialect
 - `server.py` — `APIKeyMiddleware` only: both credentials, 404-vs-401 split,
   prefix stripping, trailing-slash normalisation, and the hostile cases
   (segment merely *starting* with the secret, secret in a later segment, blank
@@ -53,7 +56,7 @@ uv pip install --python .venv/bin/python -e ".[test]"
 ### Not yet tested
 
 - `embeddings.py` — provider dispatch, truncation, batch fallback (needs mocking)
-- `indexer.py` — vault scanning, incremental delta logic (needs filesystem fixtures)
+- `indexer.py` — vault scanning and the full incremental delta path end to end (needs filesystem fixtures)
 - `server.py` — MCP tool registrations (the middleware *is* covered, above)
 
 ## Architecture
