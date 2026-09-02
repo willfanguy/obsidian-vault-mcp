@@ -5,7 +5,22 @@ description = "MCP server for semantic search over an Obsidian vault"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.0",
-    "lancedb>=0.6",
+    # Bounded above, for the same reason ruff is pinned in CI below.
+    #
+    # The filter passed to table.delete() is SQL, and LanceDB changed how it
+    # parses one: 0.37.1 accepted a double-quoted string where 0.38.0 reads the
+    # same token as a column identifier. Under `>=0.6` that was a live landmine
+    # -- rebuilding the server's venv on 2026-09-01 moved it from 0.37.1 to
+    # 0.38.0 and froze the index until the quoting was fixed, with no code
+    # change and nothing in the diff to point at.
+    #
+    # The ceiling is the part doing the work: bump it deliberately, and re-run
+    # tests/test_delete_filter.py, which exercises the dialect against a real
+    # table rather than assuming it. The floor spans both known-good versions on
+    # purpose -- the current quoting is verified against 0.37.1 and 0.38.0, and
+    # the work laptop resolves through an internal mirror that stops at 0.37.1,
+    # so a tighter floor would make the project uninstallable there.
+    "lancedb>=0.37.1,<0.39",
     "openai>=1.0",
     "ollama>=0.3",
     "pydantic>=2.0",
