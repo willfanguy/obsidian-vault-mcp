@@ -285,21 +285,13 @@ def vault_index_status() -> str:
 
 
 @mcp.tool(annotations=MUTATING)
-def vault_reindex(path: str | None = None) -> str:
-    """Reindex the vault (or a single file).
-
-    Args:
-        path: Optional file path to reindex. If omitted, does incremental reindex of all changed files.
+def vault_reindex() -> str:
+    """Reindex every vault file that has changed since the last run.
 
     Returns:
         Reindex results: files processed, chunks created, duration.
     """
-    vault_path = VAULT_PATH
-    if path:
-        # Single file reindex - just do incremental (it handles the diff)
-        result = incremental_index(vault_path)
-    else:
-        result = incremental_index(vault_path)
+    result = incremental_index(VAULT_PATH)
 
     return (
         f"Reindex complete:\n"
