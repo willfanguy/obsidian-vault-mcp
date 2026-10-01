@@ -37,7 +37,7 @@ uv pip install --python .venv/bin/python -e ".[test]"
 
 - **Frameworks**: pytest + hypothesis (property-based testing)
 - **Test location**: `tests/` directory
-- **Policy**: Follows workspace-level Testing Standards. Pure functions tested directly; search scoring tested via formula replication, not live LanceDB. The one deliberate exception is the delete-filter test, which does hit a scratch LanceDB table: the bug it guards was a wrong assumption about LanceDB's SQL dialect, and a replicated formula would have reproduced the same wrong assumption.
+- **Policy**: Follows workspace-level Testing Standards. Pure functions tested directly; search scoring tested via formula replication, not live LanceDB. Two deliberate exceptions hit a scratch LanceDB table. The delete-filter test does, because the bug it guards was a wrong assumption about LanceDB's SQL dialect, and a replicated formula would have reproduced the same wrong assumption. The embedding-failure tests do, because the bug they guard lived in what got *stored* (zero vectors, an advanced manifest), which only a real table and manifest can show. They fake only the `openai` module, at the import `_embed_openai` uses.
 
 ### Test coverage
 
@@ -52,12 +52,29 @@ uv pip install --python .venv/bin/python -e ".[test]"
   prefix, non-ASCII header/path, lifespan passthrough). Driven as raw ASGI via
   `asyncio.run`, so no pytest-asyncio dependency. Both the `startswith` bug and
   the missing-normalisation bug were mutation-checked to confirm the tests bite.
+- Embedding failures (`tests/test_embedding_failures.py`) — a failing provider
+  must raise `EmbeddingError`, never return a placeholder vector. End to end
+  over a temp vault: search raises during an outage; an incremental run stores
+  no zero vectors, keeps a failed file's old chunks and manifest entry, and
+  retries it once the provider recovers; one rejected chunk fails only its own
+  file; a failed full reindex leaves the previous table and manifest untouched.
+  Mutation-checked (restoring the zero-fill fails 7; deleting old chunks before
+  embedding fails 1). Guards the 2026-10-01 outage that stored 111 zero chunks.
 
 ### Not yet tested
 
-- `embeddings.py` — provider dispatch, truncation, batch fallback (needs mocking)
-- `indexer.py` — vault scanning and the full incremental delta path end to end (needs filesystem fixtures)
+- `embeddings.py` — truncation, and the Ollama path beyond error wrapping
+- `indexer.py` — `scan_vault` skip-dir rules
 - `server.py` — MCP tool registrations (the middleware *is* covered, above)
+
+## Embedding failures — never zero-fill
+
+`embeddings.embed_texts` raises `EmbeddingError` when the provider can't embed a
+text. Don't catch it and substitute anything: a zero vector is equidistant from
+every chunk, so it turns search into identical junk results and turns indexed
+notes into rows that look done but can never match. `incremental_index` handles
+it per file (keep old chunks, keep the old manifest entry, retry next run);
+`full_index` lets it propagate before touching the existing table.
 
 ## Architecture
 

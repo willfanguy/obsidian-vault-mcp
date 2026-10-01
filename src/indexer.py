@@ -129,15 +129,16 @@ def scan_vault(vault_path: str) -> list[tuple[str, float]]:
 
 
 def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50) -> dict:
-    """Build a complete index from scratch."""
+    """Build a complete index from scratch.
+
+    The existing table and manifest are only replaced once every chunk has
+    embedded. If the provider fails, EmbeddingError propagates and the previous
+    index is left exactly as it was.
+    """
     start = time.time()
     vault = Path(vault_path)
     db = get_db(db_path)
     embeddings.get_dimensions()  # warm up embedding provider
-
-    # Drop existing table
-    if TABLE_NAME in db.table_names():
-        db.drop_table(TABLE_NAME)
 
     files = scan_vault(vault_path)
     logger.info(f"Scanning {len(files)} markdown files...")
@@ -160,10 +161,10 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
             chunk["file_mtime"] = mtime
         all_chunks.extend(chunks)
 
-    # Persist the manifest regardless of whether any chunks were produced.
-    save_manifest(processed_mtimes, db_path)
-
     if not all_chunks:
+        if TABLE_NAME in db.table_names():
+            db.drop_table(TABLE_NAME)
+        save_manifest(processed_mtimes, db_path)
         return {
             "files_indexed": len(processed_mtimes),
             "chunks_created": 0,
@@ -202,8 +203,11 @@ def full_index(vault_path: str, db_path: str | None = None, batch_size: int = 50
             }
         )
 
-    table = db.create_table(TABLE_NAME, data=records)
+    table = db.create_table(TABLE_NAME, data=records, mode="overwrite")
     create_or_rebuild_fts_index(table)
+    # Record every file we read, including zero-chunk notes, but only now that
+    # the table actually holds them.
+    save_manifest(processed_mtimes, db_path)
 
     duration = time.time() - start
     unique_files = len(set(r["file_path"] for r in records))
@@ -263,13 +267,11 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
             "duration_seconds": round(time.time() - start, 2),
         }
 
-    # Remove old chunks for files being reindexed or deleted
-    paths_to_remove = set(p for p, _ in to_reindex) | deleted
-    if paths_to_remove:
-        table.delete(build_path_delete_filter(paths_to_remove))
-
-    # Index new/changed files
-    new_chunks = []
+    # Chunk and embed each changed file on its own, so a provider failure only
+    # costs the file it hit. A failed file keeps its old chunks and its old
+    # manifest entry, so the next run retries it.
+    records = []
+    reindexed: set[str] = set()
     failed: set[str] = set()
     for rel_path, mtime in to_reindex:
         full_path = vault / rel_path
@@ -281,17 +283,17 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
         chunks = chunk_markdown(rel_path, content, file_mtime=mtime)
         for chunk in chunks:
             chunk["file_mtime"] = mtime
-        new_chunks.extend(chunks)
-
-    if new_chunks:
-        texts = [c["text_to_embed"] for c in new_chunks]
-        all_vectors = []
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            all_vectors.extend(embeddings.embed_texts(batch))
-
-        records = []
-        for chunk, vector in zip(new_chunks, all_vectors):
+        texts = [c["text_to_embed"] for c in chunks]
+        try:
+            vectors = []
+            for i in range(0, len(texts), batch_size):
+                vectors.extend(embeddings.embed_texts(texts[i : i + batch_size]))
+        except embeddings.EmbeddingError as e:
+            logger.error(f"Embedding failed for {rel_path}; keeping its previous chunks, will retry: {e}")
+            failed.add(rel_path)
+            continue
+        reindexed.add(rel_path)
+        for chunk, vector in zip(chunks, vectors):
             records.append(
                 {
                     "file_path": chunk["file_path"],
@@ -308,6 +310,12 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
                     "vector": vector,
                 }
             )
+
+    # Replace chunks only for files that embedded cleanly, and drop deleted files
+    paths_to_remove = reindexed | deleted
+    if paths_to_remove:
+        table.delete(build_path_delete_filter(paths_to_remove))
+    if records:
         table.add(records)
 
     # Rebuild FTS index after any modifications (adds or deletes)
@@ -315,7 +323,8 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
 
     # Update the manifest to reflect the current on-disk state. After a run every
     # current file is processed at its current mtime (unchanged-and-known, or just
-    # reindexed). Files that failed to read keep their prior state so they retry.
+    # reindexed). Files that failed to read or embed keep their prior state so
+    # they retry.
     new_manifest = dict(current_files)
     for rel_path in failed:
         if rel_path in known_mtimes:
@@ -326,8 +335,9 @@ def incremental_index(vault_path: str, db_path: str | None = None, batch_size: i
 
     duration = time.time() - start
     return {
-        "files_indexed": len(to_reindex),
-        "chunks_created": len(new_chunks),
+        "files_indexed": len(reindexed),
+        "chunks_created": len(records),
         "files_removed": len(deleted),
+        "files_failed": len(failed),
         "duration_seconds": round(duration, 2),
     }

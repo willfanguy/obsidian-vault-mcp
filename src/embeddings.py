@@ -12,6 +12,16 @@ OLLAMA_MODEL = "nomic-embed-text"
 OLLAMA_DIMENSIONS = 768
 
 
+class EmbeddingError(RuntimeError):
+    """The embedding provider could not embed a text.
+
+    Callers must handle this, never paper over it. A placeholder vector is worse
+    than no vector: zeros are equidistant from everything, so a zero query vector
+    returns the same junk for every search, and a zero chunk vector is stored,
+    marked done, and stays unsearchable after the provider recovers (2026-10-01).
+    """
+
+
 def get_provider() -> str:
     return os.getenv("EMBEDDING_PROVIDER", "openai")
 
@@ -21,10 +31,16 @@ def get_dimensions() -> int:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Embed texts in order. Raises EmbeddingError if any text can't be embedded."""
     provider = get_provider()
-    if provider == "openai":
-        return _embed_openai(texts)
-    return _embed_ollama(texts)
+    try:
+        if provider == "openai":
+            return _embed_openai(texts)
+        return _embed_ollama(texts)
+    except EmbeddingError:
+        raise
+    except Exception as e:
+        raise EmbeddingError(f"{provider} embedding failed: {e}") from e
 
 
 def embed_query(text: str) -> list[float]:
@@ -55,6 +71,8 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
             )
             all_embeddings.extend([item.embedding for item in response.data])
         except Exception as e:
+            # Retrying one at a time salvages a batch that failed because of a
+            # single oversized or rejected text.
             logger.warning(f"Batch embedding failed at index {i}: {e}. Embedding individually.")
             for text in batch:
                 try:
@@ -65,8 +83,9 @@ def _embed_openai(texts: list[str]) -> list[list[float]]:
                     )
                     all_embeddings.append(resp.data[0].embedding)
                 except Exception as e2:
-                    logger.error(f"Single embedding failed: {e2}. Using zero vector.")
-                    all_embeddings.append([0.0] * OPENAI_DIMENSIONS)
+                    # Stop at the first failure. During an outage every call fails,
+                    # so retrying the rest only burns requests.
+                    raise EmbeddingError(f"OpenAI embedding failed: {e2}") from e2
     return all_embeddings
 
 

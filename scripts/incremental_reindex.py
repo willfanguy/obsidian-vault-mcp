@@ -27,4 +27,6 @@ print(f"\nDone!")
 print(f"  Files indexed: {result['files_indexed']}")
 print(f"  Chunks created: {result['chunks_created']}")
 print(f"  Files removed: {result['files_removed']}")
+if result.get("files_failed"):
+    print(f"  Files failed: {result['files_failed']} (kept previous chunks; retried next run)")
 print(f"  Duration: {result['duration_seconds']}s")

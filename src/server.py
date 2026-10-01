@@ -293,11 +293,18 @@ def vault_reindex() -> str:
     """
     result = incremental_index(VAULT_PATH)
 
+    failed = result.get("files_failed", 0)
+    failed_line = (
+        f"  Files failed: {failed} (kept their previous chunks; retried on the next run)\n"
+        if failed
+        else ""
+    )
     return (
         f"Reindex complete:\n"
         f"  Files indexed: {result['files_indexed']}\n"
         f"  Chunks created: {result['chunks_created']}\n"
         f"  Files removed: {result['files_removed']}\n"
+        f"{failed_line}"
         f"  Duration: {result['duration_seconds']}s"
     )
 
